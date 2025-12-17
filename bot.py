@@ -1,90 +1,62 @@
-
 import os
-import logging
-from dotenv import load_dotenv
+from contextlib import asynccontextmanager
 
-from telegram import Update, constants
-from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
-from langchain_groq import ChatGroq
-
-# 1. Carregar variáveis de ambiente (Segurança)
-load_dotenv()
-
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-
-# Verificação básica para não rodar sem chaves
-if not TELEGRAM_TOKEN or not GROQ_API_KEY:
-    raise ValueError("ERRO: As chaves TELEGRAM_TOKEN ou GROQ_API_KEY não foram encontradas no arquivo .env")
-
-# 2. Configuração de Logs (Para você ver o que acontece no terminal)
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
-
-# 3. Configurar o Modelo IA (LangChain)
-# Aumentei max_tokens para respostas mais completas se necessário
-chat = ChatGroq(
-    api_key=GROQ_API_KEY,
-    model="llama-3.1-8b-instant", 
-    temperature=0.5,  # Um pouco mais criativo, mas ainda focado
-    max_tokens=512
+from fastapi import FastAPI, Request
+from telegram import Update
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
 )
 
-# --- FUNÇÕES DO BOT ---
+TOKEN = os.environ["BOT_TOKEN"]  # defina BOT_TOKEN no Render
+WEBHOOK_PATH = "/webhook"        # mesma rota que você usará no setWebhook
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Envia uma mensagem de boas-vindas quando o comando /start é acionado."""
-    user_name = update.effective_user.first_name
-    await update.message.reply_text(
-        f"Olá, {user_name}! Sou seu assistente virtual inteligente.\n"
-        "Pode me perguntar qualquer coisa que tentarei ajudar."
-    )
+# cria aplicação do python-telegram-bot
+application = (
+    Application.builder()
+    .token(TOKEN)
+    .build()
+)
 
-async def responder_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Recebe a mensagem do usuário, envia para a Groq e responde."""
-    user_message = update.message.text
-    
-    # Log no terminal (ajuda a debugar)
-    logger.info(f"Mensagem recebida de {update.effective_user.first_name}: {user_message}")
+# ====== HANDLERS DO SEU BOT ======
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Bot online no Render!")
 
-    try:
-        # 4. UX: Mostrar que o bot está "escrevendo" enquanto a IA pensa
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=constants.ChatAction.TYPING)
+application.add_handler(CommandHandler("start", start))
+# aqui você adiciona os demais handlers que já tinha no seu código
+# application.add_handler(...)
 
-        # 5. Processamento Assíncrono (ainvoke)
-        # Usamos ainvoke em vez de invoke para não travar o bot
-        messages = [
-            ("system", "Você é um assistente útil, direto e educado."),
-            ("human", user_message),
-        ]
-        
-        # Chama a IA
-        resposta_ia = await chat.ainvoke(messages)
-        
-        # Envia a resposta de volta para o Telegram
-        await update.message.reply_text(resposta_ia.content)
+# ====== FASTAPI + LIFESPAN PARA CONFIGURAR WEBHOOK ======
+RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")  # Render preenche em runtime
 
-    except Exception as e:
-        logger.error(f"Erro ao processar mensagem: {e}")
-        await update.message.reply_text("Desculpe, tive um erro interno ao processar sua solicitação. Tente novamente.")
 
-def main() -> None:
-    """Inicia o bot."""
-    # Criar a aplicação
-    application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # só tenta setar webhook se tiver URL externa disponível
+    if RENDER_EXTERNAL_URL:
+        webhook_url = RENDER_EXTERNAL_URL + WEBHOOK_PATH
+        await application.bot.set_webhook(webhook_url)
+    await application.initialize()
+    await application.start()
+    yield
+    await application.stop()
+    await application.shutdown()
 
-    # Adicionar os manipuladores (Handlers)
-    application.add_handler(CommandHandler("start", start))
-    
-    # O filtro filters.TEXT & ~filters.COMMAND garante que ele só leia textos que não são comandos
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, responder_mensagem))
 
-    # Iniciar o bot
-    print(f"Bot iniciado com sucesso! Aguardando mensagens...")
-    application.run_polling()
+app = FastAPI(lifespan=lifespan)
 
-if __name__ == "__main__":
-    main()
+
+@app.post(WEBHOOK_PATH)
+async def telegram_webhook(request: Request):
+    """Endpoint chamado pelo Telegram."""
+    data = await request.json()
+    update = Update.de_json(data, application.bot)
+    await application.process_update(update)
+    return {"ok": True}
+
+
+@app.get("/health")
+async def health():
+    """Usado pelo Render para health check."""
+    return {"status": "ok"}
