@@ -38,6 +38,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.text:
+        return
+
     user_text = update.message.text
 
     completion = groq_client.chat.completions.create(
@@ -67,7 +70,7 @@ application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
 # ========= FASTAPI + WEBHOOK (Render) =========
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Inicializa o application do telegram
+    # Inicializa o application do Telegram
     await application.initialize()
 
     # Configura webhook automaticamente quando a URL externa do Render estiver disponível
