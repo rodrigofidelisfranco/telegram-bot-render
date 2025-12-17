@@ -1,0 +1,4 @@
+python-telegram-com
+langchain
+langchain-groq
+streamlit
