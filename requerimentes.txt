@@ -1,4 +1,5 @@
-python-telegram-com
-langchain
-langchain-groq
-streamlit
+python-telegram-bot==20.7
+fastapi==0.115.0
+uvicorn[standard]==0.30.0
+groq==0.12.0
+python-dotenv==1.0.1
